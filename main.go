@@ -17,27 +17,41 @@ import (
 )
 
 var pid string
+var iconData []byte
+var defaultIcon []byte = IconData
+var defaultTitle string = "Hybrid Launcher"
+var defaultTooltip string = "Hybrid Launcher Application"
+var defaultRootHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    fmt.Fprint(w, "Hello Hybrid Launcher")
+})
 
 type Config struct {
-    HandleRoot  bool
-    Pid         string
     Port        int
     Open        bool
+    Pid         string
+    Icon        []byte
+    Title       string
+    Tooltip     string
     TrayOnReady func()
+    RootHandler http.Handler
 }
 
 func DefaultConfig() *Config {
     pid := _pid()
     return &Config{
         Port: 0,
-        Open: true,
         Pid: *pid,
-        HandleRoot: true,
+        Open: true,
         TrayOnReady: nil,
+        Icon: defaultIcon,
+        Title: defaultTitle,
+        Tooltip: defaultTooltip,
+        RootHandler: defaultRootHandler,
     }
 }
 
 func Exit() {
+    systray.Quit()
     os.Remove(pid)
     go os.Exit(0)
 }
@@ -72,21 +86,18 @@ func Start() {
 
 func StartWithConfig(c *Config) {
 
-    open := true
-    if c != nil {
-        open = c.Open
+    if c == nil {
+        Start()
+        return
     }
 
-    var port int
-    if c != nil {
-        port = c.Port
-    }
-
-    if c == nil || c.Pid == "" {
+    pid = c.Pid
+    if pid == "" {
         pid = *_pid()
-    } else {
-        pid = c.Pid
     }
+
+    open := c.Open
+    port := c.Port
     addr := Addr(&pid)
 
     if addr != nil && *addr != "" {
@@ -97,17 +108,10 @@ func StartWithConfig(c *Config) {
         os.Exit(0)
     }
 
-    if c == nil || c.HandleRoot {
-        fs := http.FileServer(http.Dir("static/"))
-        http.Handle("/", http.StripPrefix("/", fs))
-    }
-
     listener, err := net.Listen("tcp", ":" + strconv.Itoa(port))
     if err != nil {
         panic(err)
     }
-
-    //fmt.Println("Using port:", listener.Addr().(*net.TCPAddr).Port)
 
     _addr := fmt.Sprintf("%s%d", "http://localhost:", listener.Addr().(*net.TCPAddr).Port)
 
@@ -116,30 +120,79 @@ func StartWithConfig(c *Config) {
     }
     file, err := os.Create(pid)
     file.WriteString(_addr)
-    //file.Close()
 
-    var trayOnReady func()
-    if c != nil {
-        trayOnReady = c.TrayOnReady
-    }
-    if trayOnReady == nil {
-        trayOnReady = func() {
-            systray.SetTitle("Hybrid Launcher")
-            systray.SetTooltip("Hybrid Launcher Application")
-            mQuitOrig := systray.AddMenuItem("Quit", "Quit the app")
-            go func() {
-                <-mQuitOrig.ClickedCh
-                systray.Quit()
-            }()
+    go systray.Run(func() {
+
+        SetIcon(c.Icon)
+        SetTitle(c.Title)
+        SetTooltip(c.Tooltip)
+
+        rootHandler := c.RootHandler
+        if rootHandler == nil {
+            rootHandler = defaultRootHandler
         }
-    }
-    go systray.Run(trayOnReady, Exit)
 
-    if (open) {
-        go Open(_addr)
-    }
+        http.Handle("/", rootHandler)
+
+        http.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+            w.Header().Set("Content-Type", "image/x-icon")
+            w.WriteHeader(http.StatusOK)
+            w.Write(iconData)
+        })
+
+        trayOnReady := c.TrayOnReady
+        if trayOnReady == nil {
+            trayOnReady = func() {
+                mShow := systray.AddMenuItem("Show", "Show the app")
+                mQuit := systray.AddMenuItem("Quit", "Quit the app")
+                go func() {
+                    for {
+                        select {
+                            case <-mShow.ClickedCh:
+                                go Open(_addr)
+                            case <-mQuit.ClickedCh:
+                                Exit()
+                                return
+                        }
+                    }
+                }()
+            }
+        }
+
+        trayOnReady()
+
+        if (open) {
+            go Open(_addr)
+        }
+
+    }, Exit)
 
     panic(http.Serve(listener, nil))
+
+}
+
+func SetIcon(icon []byte) {
+    iconData = icon
+    if iconData == nil {
+        iconData = defaultIcon
+    }
+    systray.SetIcon(iconData)
+}
+
+func SetTitle(_title string) {
+    title := _title
+    if title == "" {
+        title = defaultTitle
+    }
+    systray.SetTitle(title)
+}
+
+func SetTooltip(_tooltip string) {
+    tooltip := _tooltip
+    if tooltip == "" {
+        tooltip = defaultTooltip
+    }
+    systray.SetTooltip(tooltip)
 }
 
 // open opens the specified URL in the default browser of the user.

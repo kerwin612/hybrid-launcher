@@ -10,8 +10,7 @@ import (
     "github.com/rakyll/statik/fs"
     "github.com/getlantern/systray"
     "github.com/kerwin612/hybrid-launcher"
-    "github.com/kerwin612/hybrid-launcher/example/icon"
-    _ "github.com/kerwin612/hybrid-launcher/example/statik"
+    _ "github.com/kerwin612/hybrid-launcher/examples/example3/statik"
 )
 
 var logger *log.Logger
@@ -31,8 +30,6 @@ func main() {
     if err != nil {
         panic(err)
     }
-    http.Handle("/", http.StripPrefix("/", http.FileServer(statikFS)))
-    //http.Handle("/", http.StripPrefix("/", http.FileServer(http.Dir("static/"))))
 
     myself, error := user.Current()
     if error != nil {
@@ -67,22 +64,20 @@ func main() {
         logger.Println("open: ", err)
     }
 
-    //c := &launcher.Config{ Pid: homedir + ".pid", Port: port, HandleRoot: false }
     c := launcher.DefaultConfig()
     c.Pid = homedir + ".pid"
     c.Port = port
-    c.HandleRoot = false
+    c.Icon = IconData
+    c.Title = "Example"
+    c.Tooltip = "Hybrid Launcher Example"
+    c.RootHandler = http.StripPrefix("/", http.FileServer(statikFS))
     c.TrayOnReady = func() {
-        systray.SetTitle("Example")
-        systray.SetTooltip("Hybrid Launcher Example")
-        systray.SetTemplateIcon(icon.Data, icon.Data)
         mQuitOrig := systray.AddMenuItem("Quit", "Quit the example app")
         go func() {
             <-mQuitOrig.ClickedCh
-            systray.Quit()
+            launcher.Exit()
         }()
     }
     launcher.StartWithConfig(c)
-    //launcher.Start()
 
 }
