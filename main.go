@@ -16,14 +16,7 @@ import (
     "github.com/getlantern/systray"
 )
 
-var pid string
-var iconData []byte
-var defaultIcon []byte = IconData
-var defaultTitle string = "Hybrid Launcher"
-var defaultTooltip string = "Hybrid Launcher Application"
-var defaultRootHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-    fmt.Fprint(w, "Hello Hybrid Launcher")
-})
+type OpenWithFunc func(string)
 
 type Config struct {
     Port        int
@@ -32,9 +25,38 @@ type Config struct {
     Icon        []byte
     Title       string
     Tooltip     string
+    OpenWith    OpenWithFunc
     TrayOnReady func()
     RootHandler http.Handler
 }
+
+var pid string
+var iconData []byte
+var defaultIcon []byte = IconData
+var defaultTitle string = "Hybrid Launcher"
+var defaultTooltip string = "Hybrid Launcher Application"
+var defaultOpenWith OpenWithFunc = func(url string) {
+    var cmd string
+    var args []string
+
+    switch runtime.GOOS {
+        case "windows":
+            cmd = "cmd"
+            args = []string{"/c", "start"}
+        case "darwin":
+            cmd = "open"
+        default: // "linux", "freebsd", "openbsd", "netbsd"
+            cmd = "xdg-open"
+    }
+
+    args = append(args, url)
+    cmd_instance := exec.Command(cmd, args...)
+    cmd_instance.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    cmd_instance.Start()
+}
+var defaultRootHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    fmt.Fprint(w, "Hello Hybrid Launcher")
+})
 
 func DefaultConfig() *Config {
     pid := _pid()
@@ -46,6 +68,7 @@ func DefaultConfig() *Config {
         Icon: defaultIcon,
         Title: defaultTitle,
         Tooltip: defaultTooltip,
+        OpenWith: defaultOpenWith,
         RootHandler: defaultRootHandler,
     }
 }
@@ -96,13 +119,18 @@ func StartWithConfig(c *Config) {
         pid = *_pid()
     }
 
+    OpenWith := c.OpenWith
+    if OpenWith == nil {
+        OpenWith = defaultOpenWith
+    }
+
     open := c.Open
     port := c.Port
     addr := Addr(&pid)
 
     if addr != nil && *addr != "" {
         if (open) {
-            go Open(*addr)
+            go OpenWith(*addr)
         }
         time.Sleep(time.Second * 1)
         os.Exit(0)
@@ -149,7 +177,7 @@ func StartWithConfig(c *Config) {
                     for {
                         select {
                             case <-mShow.ClickedCh:
-                                go Open(_addr)
+                                go OpenWith(_addr)
                             case <-mQuit.ClickedCh:
                                 Exit()
                                 return
@@ -162,7 +190,7 @@ func StartWithConfig(c *Config) {
         trayOnReady()
 
         if (open) {
-            go Open(_addr)
+            go OpenWith(_addr)
         }
 
     }, Exit)
@@ -193,26 +221,6 @@ func SetTooltip(_tooltip string) {
         tooltip = defaultTooltip
     }
     systray.SetTooltip(tooltip)
-}
-
-// open opens the specified URL in the default browser of the user.
-func Open(url string) error {
-    var cmd string
-    var args []string
-
-    switch runtime.GOOS {
-    case "windows":
-        cmd = "cmd"
-        args = []string{"/c", "start"}
-    case "darwin":
-        cmd = "open"
-    default: // "linux", "freebsd", "openbsd", "netbsd"
-        cmd = "xdg-open"
-    }
-    args = append(args, url)
-    cmd_instance := exec.Command(cmd, args...)
-    cmd_instance.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-    return cmd_instance.Start()
 }
 
 func _pid() *string {
