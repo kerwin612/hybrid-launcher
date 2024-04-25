@@ -6,9 +6,11 @@ import (
     "net/http"
     "github.com/rakyll/statik/fs"
     "github.com/getlantern/systray"
-    "github.com/kerwin612/hybrid-launcher"
+    l "github.com/kerwin612/hybrid-launcher"
     _ "github.com/kerwin612/hybrid-launcher/examples/example4/statik"
 )
+
+var launcher *l.Launcher
 
 func main() {
 
@@ -17,16 +19,20 @@ func main() {
         panic(err)
     }
 
-    myself, error := user.Current()
-    if error != nil {
-        panic(error)
+    myself, err := user.Current()
+    if err != nil {
+        panic(err)
     }
     homedir := myself.HomeDir + "/.hle/"
     if err := os.MkdirAll(homedir, 0775); err != nil {
         panic(err)
     }
 
-    c := launcher.DefaultConfig()
+    c, err := l.DefaultConfig()
+    if err != nil {
+        panic(err)
+    }
+
     c.Pid = homedir + ".pid"
     c.Icon = IconData1
     c.Title = "Example"
@@ -51,6 +57,11 @@ func main() {
 
     }
 
-    launcher.StartWithConfig(c)
+    launcher, err = l.NewWithConfig(c)
+    if err != nil {
+        panic(err)
+    }
+
+    launcher.StartAndOpen()
 
 }

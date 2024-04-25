@@ -5,7 +5,7 @@ import (
     "fmt"
     "net"
     "time"
-    "syscall"
+    "errors"
     "strconv"
     "runtime"
     "os/user"
@@ -16,170 +16,192 @@ import (
     "github.com/getlantern/systray"
 )
 
-type OpenWithFunc func(string)
-
 type Config struct {
+    Ip          string
     Port        int
-    Open        bool
     Pid         string
     Icon        []byte
     Title       string
     Tooltip     string
-    OpenWith    OpenWithFunc
     TrayOnReady func()
+    OpenWith    func(string)
     RootHandler http.Handler
 }
 
-var pid string
-var iconData []byte
+type Launcher struct{
+    config      Config
+    listener    net.Listener
+}
+
 var defaultIcon []byte = IconData
 var defaultTitle string = "Hybrid Launcher"
 var defaultTooltip string = "Hybrid Launcher Application"
-var defaultOpenWith OpenWithFunc = func(url string) {
+var defaultOpenWith func(string) = func(url string) {
     var cmd string
-    var args []string
 
     switch runtime.GOOS {
         case "windows":
-            cmd = "cmd"
-            args = []string{"/c", "start"}
+            cmd = "explorer"
         case "darwin":
             cmd = "open"
         default: // "linux", "freebsd", "openbsd", "netbsd"
             cmd = "xdg-open"
     }
 
-    args = append(args, url)
-    cmd_instance := exec.Command(cmd, args...)
-    cmd_instance.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-    cmd_instance.Start()
+    exec.Command(cmd, []string{url}...).Start()
+}
+var defaultPid func() (string, error) = func() (string, error) {
+    cur, err := user.Current()
+    if err != nil {
+        return "", err
+    }
+    return filepath.Join(filepath.Join(cur.HomeDir, ".hl"), ".pid"), nil
 }
 var defaultRootHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     fmt.Fprint(w, "Hello Hybrid Launcher")
 })
 
-func DefaultConfig() *Config {
-    pid := _pid()
+func isStarted(pid string) (string, error) {
+    _, err := os.Stat(pid)
+    if err != nil {
+        return "", err
+    }
+
+    data, err := ioutil.ReadFile(pid)
+    if err != nil {
+        return "", err
+    }
+    addr := string(data)
+    req, err := http.NewRequest("HEAD", addr, nil)
+    if err != nil {
+        return "", err
+    }
+    client := &http.Client{ Timeout: time.Second * 1 }
+    resp, err := client.Do(req)
+    if err == nil && resp != nil {
+        return addr, nil
+    }
+    os.Remove(pid)
+    return "", err
+}
+
+func DefaultConfig() (*Config, error) {
+    pid, err := defaultPid()
+    if err != nil {
+        return nil, err
+    }
     return &Config{
+        Ip: "",
         Port: 0,
-        Pid: *pid,
-        Open: true,
+        Pid: pid,
         TrayOnReady: nil,
         Icon: defaultIcon,
         Title: defaultTitle,
         Tooltip: defaultTooltip,
         OpenWith: defaultOpenWith,
         RootHandler: defaultRootHandler,
+    }, nil
+}
+
+func New() (*Launcher, error) {
+    cfg, err := DefaultConfig()
+    if err != nil {
+        return nil, err
     }
+    return NewWithConfig(cfg)
 }
 
-func Exit() {
-    systray.Quit()
-    os.Remove(pid)
-    go os.Exit(0)
-}
-
-func Addr(pid *string) *string {
-    if pid == nil || *pid == "" {
-        pid = _pid()
-    }
-    if _, err := os.Stat(*pid); err == nil {
-        data, err := ioutil.ReadFile(*pid)
-        if err != nil {
-            panic(err)
-        }
-        addr := string(data)
-        req, err := http.NewRequest("HEAD", addr, nil)
-        if err != nil {
-            panic(err)
-        }
-        client := &http.Client{ Timeout: time.Second * 1 }
-        resp, err := client.Do(req)
-        if err == nil && resp != nil {
-            return &addr
-        }
-        os.Remove(*pid)
-    }
-    return nil
-}
-
-func Start() {
-    StartWithConfig(DefaultConfig())
-}
-
-func StartWithConfig(c *Config) {
+func NewWithConfig(c *Config) (*Launcher, error) {
 
     if c == nil {
-        Start()
-        return
+        return New()
     }
 
-    pid = c.Pid
-    if pid == "" {
-        pid = *_pid()
+    cfg := *c
+
+    if cfg.Ip == "" {
+        cfg.Ip = "localhost"
     }
 
-    OpenWith := c.OpenWith
-    if OpenWith == nil {
-        OpenWith = defaultOpenWith
-    }
-
-    open := c.Open
-    port := c.Port
-    addr := Addr(&pid)
-
-    if addr != nil && *addr != "" {
-        if (open) {
-            go OpenWith(*addr)
+    if cfg.Pid == "" {
+        pid, err := defaultPid()
+        if err != nil {
+            return nil, err
         }
-        time.Sleep(time.Second * 1)
-        os.Exit(0)
+        cfg.Pid = pid
     }
 
-    listener, err := net.Listen("tcp", ":" + strconv.Itoa(port))
+    if cfg.Icon == nil {
+        cfg.Icon = defaultIcon
+    }
+
+    if cfg.Title == "" {
+        cfg.Title = defaultTitle
+    }
+
+    if cfg.Tooltip == "" {
+        cfg.Tooltip = defaultTooltip
+    }
+
+    if cfg.OpenWith == nil {
+        cfg.OpenWith = defaultOpenWith
+    }
+
+    if cfg.RootHandler == nil {
+        cfg.RootHandler = defaultRootHandler
+    }
+
+    addr, _ := isStarted(cfg.Pid)
+    if addr != "" {
+        return nil, errors.New("There are instances started, see address in pid file.")
+    }
+
+    ln, err := net.Listen("tcp", net.JoinHostPort(cfg.Ip, strconv.Itoa(cfg.Port)))
     if err != nil {
-        panic(err)
+        return nil, err
     }
 
-    _addr := fmt.Sprintf("%s%d", "http://localhost:", listener.Addr().(*net.TCPAddr).Port)
+    cfg.Port = ln.Addr().(*net.TCPAddr).Port
 
-    if err := os.MkdirAll(filepath.Dir(pid), 0775); err != nil {
-        panic(err)
+    return &Launcher{
+        config: cfg,
+        listener: ln,
+    }, nil
+
+}
+
+func (l *Launcher) start(isOpen bool) error {
+
+    addr, _ := isStarted(l.config.Pid)
+    if addr != "" {
+        return errors.New("There are instances started, see address in pid file.")
     }
-    file, err := os.Create(pid)
-    file.WriteString(_addr)
 
     go systray.Run(func() {
 
-        SetIcon(c.Icon)
-        SetTitle(c.Title)
-        SetTooltip(c.Tooltip)
+        l.SetIcon(l.config.Icon)
+        l.SetTitle(l.config.Title)
+        l.SetTooltip(l.config.Tooltip)
 
-        rootHandler := c.RootHandler
-        if rootHandler == nil {
-            rootHandler = defaultRootHandler
-        }
-
-        http.Handle("/", rootHandler)
+        http.Handle("/", l.config.RootHandler)
 
         http.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
             w.Header().Set("Content-Type", "image/x-icon")
             w.WriteHeader(http.StatusOK)
-            w.Write(iconData)
+            w.Write(l.config.Icon)
         })
 
-        trayOnReady := c.TrayOnReady
-        if trayOnReady == nil {
-            trayOnReady = func() {
+        if l.config.TrayOnReady == nil {
+            l.config.TrayOnReady = func() {
                 mShow := systray.AddMenuItem("Show", "Show the app")
                 mQuit := systray.AddMenuItem("Quit", "Quit the app")
                 go func() {
                     for {
                         select {
                             case <-mShow.ClickedCh:
-                                go OpenWith(_addr)
+                                go l.Open()
                             case <-mQuit.ClickedCh:
-                                Exit()
+                                l.Exit()
                                 return
                         }
                     }
@@ -187,48 +209,73 @@ func StartWithConfig(c *Config) {
             }
         }
 
-        trayOnReady()
+        l.config.TrayOnReady()
 
-        if (open) {
-            go OpenWith(_addr)
+        if (isOpen) {
+            go l.Open()
         }
 
-    }, Exit)
+    }, l.Exit)
 
-    panic(http.Serve(listener, nil))
+    if err := os.MkdirAll(filepath.Dir(l.config.Pid), 0775); err != nil {
+        return err
+    }
+
+    file, err := os.Create(l.config.Pid)
+    defer file.Close()
+    if err != nil {
+        return err
+    }
+
+    file.WriteString(l.Addr())
+
+    return http.Serve(l.listener, nil)
 
 }
 
-func SetIcon(icon []byte) {
-    iconData = icon
+func (l *Launcher) StartAndOpen() error {
+    return l.start(true)
+}
+
+func (l *Launcher) Start() error {
+    return l.start(false)
+}
+
+func (l *Launcher) Addr() string {
+    return fmt.Sprintf("http://%s:%d", l.config.Ip, l.config.Port)
+}
+
+func (l *Launcher) Open() {
+    go l.config.OpenWith(l.Addr())
+}
+
+func (l *Launcher) SetIcon(icon []byte) {
+    iconData := icon
     if iconData == nil {
         iconData = defaultIcon
     }
-    systray.SetIcon(iconData)
+    l.config.Icon = iconData
+    systray.SetIcon(l.config.Icon)
 }
 
-func SetTitle(_title string) {
-    title := _title
+func (l *Launcher) SetTitle(title string) {
     if title == "" {
         title = defaultTitle
     }
-    systray.SetTitle(title)
+    l.config.Title = title
+    systray.SetTitle(l.config.Title)
 }
 
-func SetTooltip(_tooltip string) {
-    tooltip := _tooltip
+func (l *Launcher) SetTooltip(tooltip string) {
     if tooltip == "" {
         tooltip = defaultTooltip
     }
-    systray.SetTooltip(tooltip)
+    l.config.Tooltip = tooltip
+    systray.SetTooltip(l.config.Tooltip)
 }
 
-func _pid() *string {
-    myself, error := user.Current()
-    if error != nil {
-        panic(error)
-    }
-    homedir := myself.HomeDir + "/.hl/"
-    pid = homedir + ".pid"
-    return &pid
+func (l *Launcher) Exit() {
+    systray.Quit()
+    os.Remove(l.config.Pid)
+    go os.Exit(0)
 }

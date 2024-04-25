@@ -4,11 +4,14 @@ import (
     "os"
     "os/user"
     "os/exec"
+    "syscall"
     "net/http"
     "github.com/rakyll/statik/fs"
-    "github.com/kerwin612/hybrid-launcher"
+    l "github.com/kerwin612/hybrid-launcher"
     _ "github.com/kerwin612/hybrid-launcher/examples/example5/statik"
 )
+
+var launcher *l.Launcher
 
 func main() {
 
@@ -22,23 +25,35 @@ func main() {
         panic(err)
     }
 
-    myself, error := user.Current()
-    if error != nil {
-        panic(error)
+    myself, err := user.Current()
+    if err != nil {
+        panic(err)
     }
     homedir := myself.HomeDir + "/.hle/"
     if err := os.MkdirAll(homedir, 0775); err != nil {
         panic(err)
     }
 
-    c := launcher.DefaultConfig()
+    c, err := l.DefaultConfig()
+    if err != nil {
+        panic(err)
+    }
+
     c.Pid = homedir + ".pid"
     c.Title = "Example"
     c.Tooltip = "Hybrid Launcher Example"
     c.RootHandler = http.StripPrefix("/", http.FileServer(statikFS))
     c.OpenWith = func(url string) {
-        exec.Command("explorer", []string{url}...).Start()
+        cmd_instance := exec.Command("cmd", []string{"/c", "start", url}...)
+        cmd_instance.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+        cmd_instance.Start()
     }
-    launcher.StartWithConfig(c)
+
+    launcher, err = l.NewWithConfig(c)
+    if err != nil {
+        panic(err)
+    }
+
+    launcher.StartAndOpen()
 
 }

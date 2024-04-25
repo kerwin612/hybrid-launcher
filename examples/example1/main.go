@@ -5,5 +5,9 @@ import (
 )
 
 func main() {
-    launcher.Start()
+    l, err := launcher.New()
+    if err != nil {
+        panic(err)
+    }
+    panic(l.StartAndOpen())
 }

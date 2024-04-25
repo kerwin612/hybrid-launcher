@@ -11,12 +11,17 @@ import (
 
 func main() {
 
+    lch, err := launcher.New()
+    if err != nil {
+        panic(err)
+    }
+
     http.HandleFunc("/exit", func (w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(200)
-        launcher.Exit()
+        lch.Exit()
     })
 
-    launcher.Start()
+    panic(lch.StartAndOpen())
 
 }
 ```  
