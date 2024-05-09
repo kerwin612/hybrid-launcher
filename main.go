@@ -119,10 +119,6 @@ func NewWithConfig(c *Config) (*Launcher, error) {
 
     cfg := *c
 
-    if cfg.Ip == "" {
-        cfg.Ip = "localhost"
-    }
-
     if cfg.Pid == "" {
         pid, err := defaultPid()
         if err != nil {
@@ -159,6 +155,10 @@ func NewWithConfig(c *Config) (*Launcher, error) {
     ln, err := net.Listen("tcp", net.JoinHostPort(cfg.Ip, strconv.Itoa(cfg.Port)))
     if err != nil {
         return nil, err
+    }
+
+    if cfg.Ip == "" {
+        cfg.Ip = "localhost"
     }
 
     cfg.Port = ln.Addr().(*net.TCPAddr).Port
