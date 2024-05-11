@@ -177,46 +177,6 @@ func (l *Launcher) start(isOpen bool) error {
         return errors.New("There are instances started, see address in pid file.")
     }
 
-    go systray.Run(func() {
-
-        l.SetIcon(l.config.Icon)
-        l.SetTitle(l.config.Title)
-        l.SetTooltip(l.config.Tooltip)
-
-        http.Handle("/", l.config.RootHandler)
-
-        http.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-            w.Header().Set("Content-Type", "image/x-icon")
-            w.WriteHeader(http.StatusOK)
-            w.Write(l.config.Icon)
-        })
-
-        if l.config.TrayOnReady == nil {
-            l.config.TrayOnReady = func() {
-                mShow := systray.AddMenuItem("Show", "Show the app")
-                mQuit := systray.AddMenuItem("Quit", "Quit the app")
-                go func() {
-                    for {
-                        select {
-                            case <-mShow.ClickedCh:
-                                go l.Open()
-                            case <-mQuit.ClickedCh:
-                                l.Exit()
-                                return
-                        }
-                    }
-                }()
-            }
-        }
-
-        l.config.TrayOnReady()
-
-        if (isOpen) {
-            go l.Open()
-        }
-
-    }, l.Exit)
-
     if err := os.MkdirAll(filepath.Dir(l.config.Pid), 0775); err != nil {
         return err
     }
@@ -229,7 +189,57 @@ func (l *Launcher) start(isOpen bool) error {
 
     file.WriteString(l.Addr())
 
-    return http.Serve(l.listener, nil)
+    go func(){
+        panic(http.Serve(l.listener, nil))
+    }()
+
+    systray.Run(
+        func() {
+
+            l.SetIcon(l.config.Icon)
+            l.SetTitle(l.config.Title)
+            l.SetTooltip(l.config.Tooltip)
+
+            http.Handle("/", l.config.RootHandler)
+
+            http.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+                w.Header().Set("Content-Type", "image/x-icon")
+                w.WriteHeader(http.StatusOK)
+                w.Write(l.config.Icon)
+            })
+
+            if l.config.TrayOnReady == nil {
+                l.config.TrayOnReady = func() {
+                    mShow := systray.AddMenuItem("Show", "Show the app")
+                    mQuit := systray.AddMenuItem("Quit", "Quit the app")
+                    go func() {
+                        for {
+                            select {
+                                case <-mShow.ClickedCh:
+                                    go l.Open()
+                                case <-mQuit.ClickedCh:
+                                    l.Exit()
+                                    return
+                            }
+                        }
+                    }()
+                }
+            }
+
+            l.config.TrayOnReady()
+
+            if (isOpen) {
+                go l.Open()
+            }
+
+        },
+        func() {
+            os.Remove(l.config.Pid)
+            go os.Exit(0)
+        },
+    )
+
+    return nil
 
 }
 
@@ -276,6 +286,4 @@ func (l *Launcher) SetTooltip(tooltip string) {
 
 func (l *Launcher) Exit() {
     systray.Quit()
-    os.Remove(l.config.Pid)
-    go os.Exit(0)
 }
