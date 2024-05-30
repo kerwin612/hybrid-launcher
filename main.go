@@ -33,6 +33,11 @@ type Launcher struct{
     listener    net.Listener
 }
 
+type ExistingLauncher struct{
+    Addr        string
+    Open        func()
+}
+
 var defaultIcon []byte = IconData
 var defaultTitle string = "Hybrid Launcher"
 var defaultTooltip string = "Hybrid Launcher Application"
@@ -103,15 +108,15 @@ func DefaultConfig() (*Config, error) {
     }, nil
 }
 
-func New() (*Launcher, error) {
+func New() (*Launcher, *ExistingLauncher, error) {
     cfg, err := DefaultConfig()
     if err != nil {
-        return nil, err
+        return nil, nil, err
     }
     return NewWithConfig(cfg)
 }
 
-func NewWithConfig(c *Config) (*Launcher, error) {
+func NewWithConfig(c *Config) (*Launcher, *ExistingLauncher, error) {
 
     if c == nil {
         return New()
@@ -122,7 +127,7 @@ func NewWithConfig(c *Config) (*Launcher, error) {
     if cfg.Pid == "" {
         pid, err := defaultPid()
         if err != nil {
-            return nil, err
+            return nil, nil, err
         }
         cfg.Pid = pid
     }
@@ -149,12 +154,17 @@ func NewWithConfig(c *Config) (*Launcher, error) {
 
     addr, _ := isStarted(cfg.Pid)
     if addr != "" {
-        return nil, errors.New("There are instances started, see address in pid file.")
+        return nil, &ExistingLauncher{
+            Addr: addr,
+            Open: func() {
+                cfg.OpenWith(addr)
+            },
+        }, errors.New("There are instances started, see address in pid file.")
     }
 
     ln, err := net.Listen("tcp", net.JoinHostPort(cfg.Ip, strconv.Itoa(cfg.Port)))
     if err != nil {
-        return nil, err
+        return nil, nil, err
     }
 
     if cfg.Ip == "" {
@@ -166,7 +176,7 @@ func NewWithConfig(c *Config) (*Launcher, error) {
     return &Launcher{
         config: cfg,
         listener: ln,
-    }, nil
+    }, nil, nil
 
 }
 
